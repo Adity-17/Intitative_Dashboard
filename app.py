@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import io
 
 st.set_page_config(page_title="Project Tracker", layout="wide")
 
@@ -25,11 +26,23 @@ EXPECTED_COLUMNS = [
 
 with st.sidebar:
     st.title("📁 Upload Data")
-    uploaded_file = st.file_uploader("Upload Excel File", type=['xlsx', 'xls'])
+    uploaded_file = st.file_uploader("Upload Excel File", type=['xlsx', 'xls', 'csv'])
 
 if uploaded_file is not None:
     try:
-        df = pd.read_excel(uploaded_file)
+        # Try to read the file - support both Excel and CSV
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+        else:
+            # For Excel files, use engine='openpyxl' only if available, otherwise use default
+            try:
+                df = pd.read_excel(uploaded_file, engine='openpyxl')
+            except:
+                try:
+                    df = pd.read_excel(uploaded_file, engine='xlrd')
+                except:
+                    df = pd.read_excel(uploaded_file)
+        
         st.success("✅ File uploaded successfully!")
         
         # Clean columns
@@ -124,55 +137,72 @@ if uploaded_file is not None:
         if not missing_columns:
             st.markdown("## 📈 Dashboard Tabs")
             
-            tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Details", "Analysis", "Data Quality"])
+            tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "📋 Details", "📈 Analysis", "🔍 Data Quality"])
             
             with tab1:
                 st.markdown("## Key Metrics")
                 col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Total Initiatives", len(df))
-                col2.metric("Unique Areas", df['Areas'].nunique() if 'Areas' in df.columns else 0)
-                col3.metric("Status Types", df['Possible Outcomes / Status'].nunique() if 'Possible Outcomes / Status' in df.columns else 0)
                 
-                # Count active sites
-                sites = ['ANK', 'MDP', 'TAR', 'Pithampur', 'External - 1', 'External - 2']
-                active_sites = sum(1 for site in sites if site in df.columns and df[site].notna().sum() > 0)
-                col4.metric("Active Sites", active_sites)
+                with col1:
+                    st.metric("📍 Total Initiatives", len(df))
+                
+                with col2:
+                    unique_areas = df['Areas'].nunique() if 'Areas' in df.columns else 0
+                    st.metric("🏢 Unique Areas", unique_areas)
+                
+                with col3:
+                    status_types = df['Possible Outcomes / Status'].nunique() if 'Possible Outcomes / Status' in df.columns else 0
+                    st.metric("🎯 Status Types", status_types)
+                
+                with col4:
+                    # Count active sites
+                    sites = ['ANK', 'MDP', 'TAR', 'Pithampur', 'External - 1', 'External - 2']
+                    active_sites = sum(1 for site in sites if site in df.columns and df[site].notna().sum() > 0)
+                    st.metric("🏭 Active Sites", active_sites)
                 
                 st.markdown("---")
                 
-                st.markdown("## Status Distribution")
-                if 'Possible Outcomes / Status' in df.columns:
-                    status_counts = df['Possible Outcomes / Status'].value_counts()
-                    st.bar_chart(status_counts)
+                col1, col2 = st.columns(2)
                 
-                st.markdown("## Initiatives by Area")
-                if 'Areas' in df.columns:
-                    area_counts = df['Areas'].value_counts()
-                    st.bar_chart(area_counts)
+                with col1:
+                    st.markdown("## Status Distribution")
+                    if 'Possible Outcomes / Status' in df.columns:
+                        status_counts = df['Possible Outcomes / Status'].value_counts()
+                        st.bar_chart(status_counts)
+                
+                with col2:
+                    st.markdown("## Initiatives by Area")
+                    if 'Areas' in df.columns:
+                        area_counts = df['Areas'].value_counts()
+                        st.bar_chart(area_counts)
+                
+                st.markdown("---")
                 
                 st.markdown("## Site-wise Initiative Count")
                 sites = ['ANK', 'MDP', 'TAR', 'Pithampur', 'External - 1', 'External - 2']
-                site_data = []
+                site_counts = {}
+                
                 for site in sites:
                     if site in df.columns:
                         count = df[site].notna().sum()
-                        site_data.append({site: count})
+                        site_counts[site] = count
                 
-                if site_data:
-                    site_df = pd.DataFrame([{list(d.keys())[0]: list(d.values())[0] for d in site_data}])
-                    st.bar_chart(site_df.T)
+                if site_counts:
+                    site_df = pd.DataFrame(list(site_counts.items()), columns=['Site', 'Initiatives'])
+                    st.bar_chart(site_df.set_index('Site'))
             
             with tab2:
                 st.markdown("## Detailed Initiatives")
                 
                 # Add filters
+                st.markdown("### 🔍 Filters")
                 filter_col1, filter_col2, filter_col3 = st.columns(3)
                 
                 with filter_col1:
                     if 'Areas' in df.columns:
                         selected_areas = st.multiselect(
                             "Filter by Area",
-                            df['Areas'].unique()
+                            sorted(df['Areas'].unique())
                         )
                     else:
                         selected_areas = None
@@ -181,13 +211,13 @@ if uploaded_file is not None:
                     if 'Possible Outcomes / Status' in df.columns:
                         selected_status = st.multiselect(
                             "Filter by Status",
-                            df['Possible Outcomes / Status'].unique()
+                            sorted(df['Possible Outcomes / Status'].unique())
                         )
                     else:
                         selected_status = None
                 
                 with filter_col3:
-                    search_text = st.text_input("Search Initiative Name")
+                    search_text = st.text_input("🔎 Search Initiative Name")
                 
                 # Apply filters
                 filtered_df = df.copy()
@@ -206,13 +236,19 @@ if uploaded_file is not None:
                 st.markdown(f"**Showing {len(filtered_df)} of {len(df)} initiatives**")
                 st.dataframe(filtered_df, use_container_width=True, height=500)
                 
+                st.markdown("---")
+                
                 # Download button
-                csv = filtered_df.to_csv(index=False)
-                st.download_button(
-                    label="📥 Download Filtered Data (CSV)",
-                    data=csv,
-                    file_name=f"initiatives_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-                )
+                col_down1, col_down2, col_down3 = st.columns(3)
+                
+                with col_down1:
+                    csv = filtered_df.to_csv(index=False)
+                    st.download_button(
+                        label="📥 Download as CSV",
+                        data=csv,
+                        file_name=f"initiatives_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
             
             with tab3:
                 st.markdown("## Data Analysis")
@@ -224,51 +260,93 @@ if uploaded_file is not None:
                         st.markdown("### Initiatives by Area (Detailed)")
                         area_dist = df['Areas'].value_counts().reset_index()
                         area_dist.columns = ['Area', 'Count']
-                        st.dataframe(area_dist, use_container_width=True)
+                        st.dataframe(area_dist, use_container_width=True, hide_index=True)
+                        
+                        st.markdown("#### Bar Chart")
+                        st.bar_chart(area_dist.set_index('Area'))
                 
                 with col2:
                     if 'Possible Outcomes / Status' in df.columns:
                         st.markdown("### Status Summary (Detailed)")
                         status_dist = df['Possible Outcomes / Status'].value_counts().reset_index()
                         status_dist.columns = ['Status', 'Count']
-                        st.dataframe(status_dist, use_container_width=True)
+                        st.dataframe(status_dist, use_container_width=True, hide_index=True)
+                        
+                        st.markdown("#### Bar Chart")
+                        st.bar_chart(status_dist.set_index('Status'))
                 
                 st.markdown("---")
                 
                 # Expected Savings Analysis
                 if 'Expected Savings' in df.columns:
                     st.markdown("### Expected Savings Analysis")
-                    st.write(df['Expected Savings'].value_counts().head(10))
+                    
+                    # Try to parse savings
+                    def parse_savings(val):
+                        try:
+                            if pd.isna(val) or val == '':
+                                return 0
+                            val_str = str(val).replace('₹', '').replace(',', '').strip()
+                            return float(val_str.split()[0])
+                        except:
+                            return 0
+                    
+                    df['Savings_Parsed'] = df['Expected Savings'].apply(parse_savings)
+                    
+                    col_sav1, col_sav2, col_sav3 = st.columns(3)
+                    with col_sav1:
+                        st.metric("💰 Total Savings", f"₹{df['Savings_Parsed'].sum():,.0f}")
+                    with col_sav2:
+                        st.metric("📊 Avg Savings", f"₹{df['Savings_Parsed'].mean():,.0f}")
+                    with col_sav3:
+                        st.metric("📈 Max Savings", f"₹{df['Savings_Parsed'].max():,.0f}")
+                    
+                    st.markdown("#### Top 10 Initiatives by Savings")
+                    top_10 = df.nlargest(10, 'Savings_Parsed')[['Site Initiatives', 'Areas', 'Expected Savings']]
+                    st.dataframe(top_10, use_container_width=True, hide_index=True)
             
             with tab4:
                 st.markdown("## Data Quality Report")
                 
-                st.markdown("### Missing Values per Column")
+                st.markdown("### 📊 Missing Values per Column")
                 missing_data = df.isnull().sum().reset_index()
                 missing_data.columns = ['Column', 'Missing Count']
                 missing_data['Missing %'] = (missing_data['Missing Count'] / len(df) * 100).round(2)
-                missing_data = missing_data[missing_data['Missing Count'] > 0].sort_values('Missing Count', ascending=False)
+                missing_data = missing_data.sort_values('Missing Count', ascending=False)
                 
-                if len(missing_data) > 0:
-                    st.dataframe(missing_data, use_container_width=True)
+                if missing_data['Missing Count'].sum() > 0:
+                    st.dataframe(missing_data, use_container_width=True, hide_index=True)
+                    st.bar_chart(missing_data.set_index('Column')['Missing Count'])
                 else:
                     st.success("✅ No missing values found!")
                 
                 st.markdown("---")
                 
-                st.markdown("### Data Type Summary")
+                st.markdown("### 📋 Data Type Summary")
                 dtype_summary = df.dtypes.reset_index()
                 dtype_summary.columns = ['Column', 'Data Type']
-                st.dataframe(dtype_summary, use_container_width=True)
+                st.dataframe(dtype_summary, use_container_width=True, hide_index=True)
                 
                 st.markdown("---")
                 
-                st.markdown("### Duplicate Rows Check")
+                st.markdown("### 🔄 Duplicate Rows Check")
                 duplicate_count = df.duplicated().sum()
                 if duplicate_count > 0:
                     st.warning(f"⚠️ Found {duplicate_count} duplicate rows")
+                    st.dataframe(df[df.duplicated(keep=False)], use_container_width=True)
                 else:
                     st.success("✅ No duplicate rows found!")
+                
+                st.markdown("---")
+                
+                st.markdown("### 📈 Row and Column Statistics")
+                stats_col1, stats_col2 = st.columns(2)
+                
+                with stats_col1:
+                    st.metric("Total Rows", len(df))
+                
+                with stats_col2:
+                    st.metric("Total Columns", len(df.columns))
         
         else:
             st.error("❌ Cannot proceed with analysis until all required columns are present")
@@ -276,28 +354,41 @@ if uploaded_file is not None:
     
     except Exception as e:
         st.error(f"❌ Error: {str(e)}")
-        st.info("Please ensure you're uploading a valid Excel file (.xlsx or .xls)")
+        st.info("💡 Troubleshooting Tips:")
+        st.markdown("""
+        1. Ensure the file is a valid Excel (.xlsx, .xls) or CSV file
+        2. Check that column names match exactly as expected
+        3. Make sure there's no hidden formatting in the file
+        4. Try converting to CSV and uploading again
+        5. Use Excel to verify the file isn't corrupted
+        """)
 
 else:
-    st.info("👈 Upload an Excel file to get started!")
+    st.info("👈 Upload an Excel or CSV file to get started!")
     
     st.markdown("---")
     st.markdown("## 📝 Expected File Format")
     st.markdown("""
-    Your Excel file should contain the following columns:
+    Your Excel/CSV file should contain the following columns:
     
-    | Column Name | Description |
-    |---|---|
-    | Areas | Functional area of the initiative |
-    | Site Initiatives | Name of the initiative |
-    | Description | Detailed description |
-    | Possible Outcomes / Status | Current status |
-    | Expected Savings | Expected financial savings |
-    | ANK | ANK site indicator |
-    | MDP | MDP site indicator |
-    | TAR | TAR site indicator |
-    | Pithampur | Pithampur site indicator |
-    | External - 1 | External site 1 indicator |
-    | External - 2 | External site 2 indicator |
-    | Remarks | Additional remarks |
+    | Column Name | Description | Example |
+    |---|---|---|
+    | Areas | Functional area | Operations, Finance, HR |
+    | Site Initiatives | Name of initiative | Process Automation |
+    | Description | Detailed description | Automation of manual processes |
+    | Possible Outcomes / Status | Current status | In Progress, Completed |
+    | Expected Savings | Expected financial savings | 500000 or ₹500,000 |
+    | ANK | ANK site indicator | Active, Planned |
+    | MDP | MDP site indicator | Active, Planned |
+    | TAR | TAR site indicator | Active, Planned |
+    | Pithampur | Pithampur site indicator | Active, Planned |
+    | External - 1 | External site 1 indicator | Active, Planned |
+    | External - 2 | External site 2 indicator | Active, Planned |
+    | Remarks | Additional remarks | On track, Delayed |
+    """)
+    
+    st.markdown("---")
+    st.markdown("## ✅ Installation Requirements")
+    st.code("""
+    pip install streamlit pandas numpy
     """)
